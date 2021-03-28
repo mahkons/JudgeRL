@@ -8,7 +8,7 @@ from torch import nn
 import random
 
 from PPO import PPO
-from params import  ENV_NAME, MIN_EPISODES_PER_UPDATE, MIN_TRANSITIONS_PER_UPDATE, ITERATIONS
+from params import  ENV_NAME, MIN_EPISODES_PER_UPDATE, MIN_TRANSITIONS_PER_UPDATE, ITERATIONS, LR, JUDGE_LR
 
 
 def evaluate_policy(env, agent, episodes):
@@ -47,8 +47,8 @@ def sample_episode(env, agent, judge):
 def train():
     env = gym.make(ENV_NAME)
 
-    judge = PPO(state_dim=env.observation_space.shape[0] + env.action_space.shape[0], action_dim=1)
-    ppo = PPO(state_dim=env.observation_space.shape[0], action_dim=env.action_space.shape[0])
+    judge = PPO(state_dim=env.observation_space.shape[0] + env.action_space.shape[0], action_dim=1, clip=True, lr=JUDGE_LR)
+    ppo = PPO(state_dim=env.observation_space.shape[0], action_dim=env.action_space.shape[0], clip=True, lr=LR)
 
     state = env.reset()
     episodes_sampled = 0
@@ -73,7 +73,7 @@ def train():
         ppo.update(trajectories)        
         judge.update(judge_trajectories)
 
-        s = sum([t[2] for tt in trajectories for t in tt])
+        s = sum([t[2] for tt in judge_trajectories for t in tt]) / len(judge_trajectories)
         print("lol {}".format(s))
         
         if (i + 1) % (ITERATIONS//100) == 0:

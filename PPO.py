@@ -2,7 +2,7 @@ import torch
 import numpy as np
 
 from networks import Actor, Critic
-from params import CRITIC_LR, ACTOR_LR, GAMMA, LAMBDA, CLIP, ENTROPY_COEF, BATCHES_PER_UPDATE, BATCH_SIZE
+from params import GAMMA, LAMBDA, AGENT_CLIP, JUDGE_KL_BETA, ENTROPY_COEF, BATCHES_PER_UPDATE, BATCH_SIZE, VALUE_COEFF
 
 def compute_lambda_returns_and_gae(trajectory):
     lambda_returns = []
@@ -21,25 +21,34 @@ def compute_lambda_returns_and_gae(trajectory):
 
 
 class PPO():
-    def __init__(self, state_dim, action_dim):
+    def __init__(self, state_dim, action_dim, clip, lr):
         self.actor = Actor(state_dim, action_dim)
         self.critic = Critic(state_dim)
-        self.actor_optim = torch.optim.Adam(self.actor.parameters(), ACTOR_LR)
-        self.critic_optim = torch.optim.Adam(self.critic.parameters(), CRITIC_LR)
+        self.actor_optim = torch.optim.Adam(self.actor.parameters(), lr)
+        self.critic_optim = torch.optim.Adam(self.critic.parameters(), lr)
+
+        self.clip = clip
+        self.old_actor = Actor(state_dim, action_dim)
 
     def _calc_loss(self, state, action, old_log_prob, expected_values, gae):
         new_log_prob, action_distr = self.actor.compute_proba(state, action)
+        with torch.no_grad():
+            old_log_prob, old_action_distr = self.old_actor.compute_proba(state, action)
         state_values = self.critic.get_value(state).squeeze(1)
 
         critic_loss = ((expected_values - state_values) ** 2).mean()
 
         unclipped_ratio = torch.exp(new_log_prob - old_log_prob)
-        clipped_ratio = torch.clamp(unclipped_ratio, 1 - CLIP, 1 + CLIP)
-        actor_loss = -torch.min(clipped_ratio * gae, unclipped_ratio * gae).mean()
+        if self.clip:
+            clipped_ratio = torch.clamp(unclipped_ratio, 1 - AGENT_CLIP, 1 + AGENT_CLIP)
+            actor_loss = -torch.min(clipped_ratio * gae, unclipped_ratio * gae).mean()
+            entropy_loss = -action_distr.entropy().mean()
+        else:
+            actor_loss = -(unclipped_ratio * gae).mean() - JUDGE_KL_BETA * torch.distributions.kl.kl_divergence(old_action_distr, action_distr).mean()
+            entropy_loss = -action_distr.entropy().mean()
 
-        entropy_loss = -action_distr.entropy().mean()
 
-        return critic_loss + actor_loss + entropy_loss * ENTROPY_COEF
+        return VALUE_COEFF * critic_loss + actor_loss + entropy_loss * ENTROPY_COEF
 
 
     def update(self, trajectories):
@@ -52,7 +61,6 @@ class PPO():
         old_log_prob = np.array(old_log_prob)
         target_value = np.array(target_value)
         advantage = np.array(advantage)
-        advnatage = (advantage - advantage.mean()) / (advantage.std() + 1e-8)
         
         
         for _ in range(BATCHES_PER_UPDATE):
@@ -70,6 +78,8 @@ class PPO():
             loss.backward()
             self.actor_optim.step()
             self.critic_optim.step()
+
+        self.old_actor.load_state_dict(self.actor.state_dict())
             
             
     def get_value(self, state):
